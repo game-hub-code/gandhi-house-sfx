@@ -86,6 +86,10 @@
   .empty{ color:var(--muted); font-size:0.9rem; text-align:center; padding:26px; border:1px dashed var(--border);
           border-radius:10px; }
 
+  .previewPanel{ background:var(--panel); border:1px solid var(--accent); border-radius:10px; padding:16px; margin-top:18px; }
+  .previewPanel h2{ font-size:0.95rem; margin:0 0 4px; }
+  .previewActions{ display:flex; gap:10px; margin-top:12px; }
+
   footer{ position:fixed; bottom:0; left:0; right:0; background:rgba(13,13,13,0.96); backdrop-filter:blur(6px);
           border-top:1px solid var(--border); padding:12px 20px; display:flex; align-items:center; gap:14px;
           justify-content:center; flex-wrap:wrap; }
@@ -151,6 +155,16 @@
 
   <div class="list" id="list"></div>
   <div class="empty" id="emptyMsg" style="display:none">No clips loaded.</div>
+
+  <div class="previewPanel" id="previewPanel" style="display:none">
+    <h2>Preview merged export</h2>
+    <p class="hint" style="margin:0 0 10px">Listen to confirm this is right, then download it.</p>
+    <audio id="previewAudio" controls style="width:100%"></audio>
+    <div class="previewActions">
+      <button class="btn primary" id="downloadWavBtn">Download WAV</button>
+      <button class="btn" id="discardPreviewBtn">Discard</button>
+    </div>
+  </div>
 </div>
 
 <footer>
@@ -179,6 +193,7 @@ const MAX_HISTORY = 100;
 let playSources = [];
 let playGain = null;
 let isPlaying = false;
+let previewUrl = null;
 let looping = true;
 let playSequenceStartCtxTime = 0;
 let playSequenceStartConcat = 0;
@@ -199,7 +214,9 @@ const fileInput = $('fileInput'), list = $('list'), emptyMsg = $('emptyMsg'), ex
       waveTitle = $('waveTitle'), waveformScroll = $('waveformScroll'), waveformInner = $('waveformInner'),
       waveCanvas = $('waveCanvas'), shadeLeft = $('shadeLeft'), shadeRight = $('shadeRight'),
       handleStart = $('handleStart'), handleEnd = $('handleEnd'), playhead = $('playhead'), noSelection = $('noSelection'),
-      ruler = $('ruler'), cutsLayer = $('cutsLayer'), selectionOverlayEl = $('selectionOverlay');
+      ruler = $('ruler'), cutsLayer = $('cutsLayer'), selectionOverlayEl = $('selectionOverlay'),
+      previewPanel = $('previewPanel'), previewAudio = $('previewAudio'),
+      downloadWavBtn = $('downloadWavBtn'), discardPreviewBtn = $('discardPreviewBtn');
 
 // draggable picker marker shown on the ruler; created once, re-attached each drawRuler() since
 // drawRuler() clears ruler.innerHTML to redraw tick labels.
@@ -894,17 +911,36 @@ exportBtn.addEventListener('click', async () => {
 
     const rendered = await offlineCtx.startRendering();
     const wavBlob = audioBufferToWav(rendered);
-    const url = URL.createObjectURL(wavBlob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'merged_audio.wav';
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
-    statusEl.textContent = 'Exported merged_audio.wav';
+    showPreview(wavBlob);
+    statusEl.textContent = 'Rendered — preview below, then download to confirm.';
   } catch (err) {
     console.error(err);
     statusEl.textContent = 'Export failed — see console.';
   }
   exportBtn.disabled = false;
+});
+
+function showPreview(wavBlob){
+  if (previewUrl) URL.revokeObjectURL(previewUrl);
+  previewUrl = URL.createObjectURL(wavBlob);
+  previewAudio.src = previewUrl;
+  previewPanel.style.display = 'block';
+  previewPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+downloadWavBtn.addEventListener('click', () => {
+  if (!previewUrl) return;
+  const a = document.createElement('a');
+  a.href = previewUrl; a.download = 'merged_audio.wav';
+  document.body.appendChild(a); a.click(); a.remove();
+});
+
+discardPreviewBtn.addEventListener('click', () => {
+  previewAudio.pause();
+  previewAudio.removeAttribute('src'); previewAudio.load();
+  if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = null; }
+  previewPanel.style.display = 'none';
+  statusEl.textContent = '';
 });
 
 function audioBufferToWav(buffer){
