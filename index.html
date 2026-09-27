@@ -1,0 +1,918 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SFX Editor</title>
+<style>
+  :root{ --bg:#0d0d0d; --panel:#161616; --panel2:#1e1e1e; --accent:#e0b23c; --accent2:#5ecbd8; --danger:#e03232;
+         --text:#f2f2f2; --muted:#8a8a8a; --border:#2a2a2a; }
+  *{box-sizing:border-box;}
+  body{ margin:0; font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif; background:var(--bg); color:var(--text); }
+  .wrap{ max-width:1100px; margin:0 auto; padding:20px 20px 140px; }
+  h1{ font-size:1.15rem; margin:0 0 4px; }
+  .hint{ color:var(--muted); font-size:0.78rem; margin:0 0 14px; }
+
+  .transport{ display:flex; align-items:center; gap:10px; background:var(--panel); border:1px solid var(--border);
+              border-radius:10px; padding:10px 16px; margin-bottom:14px; flex-wrap:wrap; }
+  .timecode{ font-family:'SF Mono',Consolas,monospace; font-size:1.25rem; letter-spacing:1px; min-width:150px; }
+  .timecode small{ display:block; font-size:0.65rem; color:var(--muted); font-family:inherit; letter-spacing:0; }
+  .tbtn{ background:#242424; border:1px solid #333; color:var(--text); width:34px; height:34px; border-radius:6px;
+         cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:0.95rem; }
+  .tbtn:hover{ background:#333; }
+  .tbtn.active{ background:var(--accent); border-color:var(--accent); color:#141414; }
+  .tbtn.danger:hover{ background:var(--danger); border-color:var(--danger); }
+  .tbtn:disabled{ opacity:0.35; cursor:not-allowed; }
+  .sep{ width:1px; align-self:stretch; background:var(--border); margin:0 2px; }
+  .selInfo{ display:flex; gap:16px; margin-left:auto; font-size:0.78rem; color:var(--muted); flex-wrap:wrap; }
+  .selInfo .field{ display:flex; flex-direction:column; gap:2px; }
+  .selInfo label{ font-size:0.65rem; text-transform:uppercase; letter-spacing:.05em; }
+  .selInfo input{ width:78px; background:var(--panel2); border:1px solid var(--border); color:var(--text);
+                  border-radius:5px; padding:4px 6px; font-size:0.78rem; font-family:monospace; }
+
+  .waveformPanel{ background:var(--panel); border:1px solid var(--border); border-radius:10px; padding:0;
+                  margin-bottom:22px; overflow:hidden; }
+  .waveformHead{ display:flex; align-items:center; justify-content:space-between; padding:10px 16px;
+                 border-bottom:1px solid var(--border); font-size:0.85rem; }
+  .waveformScroll{ overflow-x:auto; overflow-y:hidden; background:#050505; position:relative; }
+  .waveformInner{ position:relative; height:180px; touch-action:none; }
+  canvas#waveCanvas{ display:block; height:180px; }
+  .trimShade{ position:absolute; top:0; bottom:0; background:rgba(0,0,0,0.65); pointer-events:none; z-index:2; }
+  .cutShade{ position:absolute; top:0; bottom:0; pointer-events:none; z-index:3;
+             background:repeating-linear-gradient(45deg, rgba(224,50,50,0.35), rgba(224,50,50,0.35) 5px, rgba(0,0,0,0.75) 5px, rgba(0,0,0,0.75) 10px);
+             border-left:1px solid var(--danger); border-right:1px solid var(--danger); }
+  .selectionOverlay{ position:absolute; top:0; bottom:0; background:rgba(94,203,216,0.28); border-left:1px solid var(--accent2);
+                      border-right:1px solid var(--accent2); pointer-events:none; z-index:4; display:none; }
+  .handle{ position:absolute; top:0; bottom:0; width:10px; margin-left:-5px; cursor:ew-resize; z-index:5; }
+  .handle::after{ content:''; position:absolute; top:0; bottom:0; left:4px; width:2px; background:var(--accent); }
+  .handle .grip{ position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:14px; height:28px;
+                 background:var(--accent); border-radius:3px; }
+  .playhead{ position:absolute; top:0; bottom:0; width:1px; background:var(--accent2); z-index:6; pointer-events:none; }
+  .ruler{ height:20px; position:relative; border-bottom:1px solid var(--border); font-size:0.65rem; color:var(--muted); cursor:pointer; }
+  .rulerTick{ position:absolute; top:2px; white-space:nowrap; }
+  .rulerPicker{ position:absolute; top:0; width:0; height:0; margin-left:-6px; cursor:ew-resize; z-index:8;
+                border-left:6px solid transparent; border-right:6px solid transparent; border-top:9px solid var(--accent2); }
+  .noSelection{ padding:50px 16px; text-align:center; color:var(--muted); font-size:0.9rem; }
+
+  .listHead{ display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+  .listHead h2{ font-size:0.95rem; margin:0; }
+  .toolbar{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .btn{ background:#242424; color:var(--text); border:1px solid #333; border-radius:7px; padding:8px 14px;
+        cursor:pointer; font-size:0.82rem; }
+  .btn:hover{ background:#333; }
+  .btn.primary{ background:var(--accent); border-color:var(--accent); color:#141414; font-weight:600; }
+  .btn.primary:hover{ filter:brightness(1.08); }
+  .btn:disabled{ opacity:0.4; cursor:not-allowed; }
+  input[type=file]{ display:none; }
+
+  .list{ display:flex; flex-direction:column; gap:8px; }
+  .track{ background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:9px 12px;
+          display:flex; align-items:center; gap:10px; cursor:grab; }
+  .track.dragging{ opacity:0.4; }
+  .track.selected{ border-color:var(--accent); background:#241f14; }
+  .handleDrag{ color:var(--muted); }
+  .idx{ color:var(--muted); font-size:0.72rem; width:16px; text-align:center; }
+  .tname{ flex:1; font-size:0.88rem; cursor:pointer; word-break:break-word; }
+  .tdur{ color:var(--muted); font-size:0.72rem; }
+  .volwrap{ display:flex; align-items:center; gap:5px; font-size:0.7rem; color:var(--muted); }
+  .volwrap input{ width:70px; accent-color:var(--accent); }
+  .iconBtn{ background:#242424; border:1px solid #333; color:var(--text); border-radius:6px; width:26px; height:26px;
+            display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:0.78rem; }
+  .iconBtn:hover{ background:#333; }
+
+  .empty{ color:var(--muted); font-size:0.9rem; text-align:center; padding:26px; border:1px dashed var(--border);
+          border-radius:10px; }
+
+  footer{ position:fixed; bottom:0; left:0; right:0; background:rgba(13,13,13,0.96); backdrop-filter:blur(6px);
+          border-top:1px solid var(--border); padding:12px 20px; display:flex; align-items:center; gap:14px;
+          justify-content:center; flex-wrap:wrap; }
+  .gapField{ display:flex; align-items:center; gap:6px; font-size:0.8rem; color:var(--muted); }
+  .gapField input{ width:56px; background:var(--panel2); border:1px solid var(--border); color:var(--text);
+                    border-radius:5px; padding:5px 6px; }
+  #status{ font-size:0.8rem; color:var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>SFX Editor</h1>
+  <p class="hint">Drag on the waveform to select a range, then click "Delete selection" (or press Delete) to cut it out. Ctrl+Z / Cmd+Z undoes any change.</p>
+
+  <div class="transport">
+    <div class="timecode" id="timecode">00:00.000<small id="totalTime">/ 00:00.000</small></div>
+    <button class="tbtn" id="playBtn" title="Play/Pause">▶</button>
+    <button class="tbtn" id="stopBtn" title="Stop">■</button>
+    <button class="tbtn" id="loopBtn" title="Loop">⟲</button>
+    <button class="tbtn" id="prevBtn" title="Previous track">|◀</button>
+    <button class="tbtn" id="nextBtn" title="Next track">▶|</button>
+    <div class="sep"></div>
+    <button class="tbtn" id="zoomOutBtn" title="Zoom out">−</button>
+    <button class="tbtn" id="zoomInBtn" title="Zoom in">+</button>
+    <div class="sep"></div>
+    <button class="tbtn danger" id="deleteSelBtn" title="Delete selected range" disabled>✂</button>
+    <button class="tbtn" id="undoBtn" title="Undo (Ctrl+Z)">↶</button>
+    <div class="selInfo">
+      <div class="field"><label>Start</label><input id="startInput" type="number" step="0.01" min="0"></div>
+      <div class="field"><label>End</label><input id="endInput" type="number" step="0.01" min="0"></div>
+      <div class="field"><label>Effective</label><input id="durInput" type="number" step="0.01" disabled></div>
+      <div class="field"><label>&nbsp;</label><button class="btn" id="clearSelBtn">Reset trim & cuts</button></div>
+    </div>
+  </div>
+
+  <div class="waveformPanel">
+    <div class="waveformHead">
+      <span id="waveTitle">No track selected</span>
+    </div>
+    <div class="waveformScroll" id="waveformScroll">
+      <div class="ruler" id="ruler"></div>
+      <div class="waveformInner" id="waveformInner">
+        <canvas id="waveCanvas"></canvas>
+        <div class="trimShade" id="shadeLeft"></div>
+        <div class="trimShade" id="shadeRight"></div>
+        <div id="cutsLayer"></div>
+        <div class="selectionOverlay" id="selectionOverlay"></div>
+        <div class="handle" id="handleStart"><div class="grip"></div></div>
+        <div class="handle" id="handleEnd"><div class="grip"></div></div>
+        <div class="playhead" id="playhead"></div>
+      </div>
+    </div>
+    <div class="noSelection" id="noSelection">Select a clip below to edit its waveform.</div>
+  </div>
+
+  <div class="listHead">
+    <h2>Clips (drag to reorder — this sets export order)</h2>
+    <div class="toolbar">
+      <label class="btn" for="fileInput">+ Add files</label>
+      <input type="file" id="fileInput" multiple accept="audio/*">
+    </div>
+  </div>
+
+  <div class="list" id="list"></div>
+  <div class="empty" id="emptyMsg" style="display:none">No clips loaded.</div>
+</div>
+
+<footer>
+  <div class="gapField">Gap between clips (ms) <input type="number" id="gapMs" value="0" min="0" step="10"></div>
+  <button class="btn primary" id="exportBtn" disabled>Export merged file</button>
+  <span id="status">Loading clips...</span>
+</footer>
+
+<script>
+const AUDIO_FOLDER = 'audio/';
+const MANIFEST_URL = AUDIO_FOLDER + 'manifest.json';
+
+const ctx = new (window.AudioContext || window.webkitAudioContext)();
+
+// tracks = metadata only: {id, name, duration, start, end, volume, cuts:[[s,e],...]}
+// buffersById persists across undo regardless of whether a track is currently in `tracks`.
+let tracks = [];
+let buffersById = {};
+let selectedId = null;
+let dragFromIndex = null;
+let selection = null; // {start,end} in original buffer seconds, transient until deleted
+
+let history = [];
+const MAX_HISTORY = 100;
+
+let playSources = [];
+let playGain = null;
+let isPlaying = false;
+let looping = true;
+let playSequenceStartCtxTime = 0;
+let playSequenceStartConcat = 0;
+let pausedConcatPos = 0;
+let rafId = null;
+
+let pxPerSecond = 100;
+const MIN_PX = 20, MAX_PX = 800;
+
+const $ = id => document.getElementById(id);
+const fileInput = $('fileInput'), list = $('list'), emptyMsg = $('emptyMsg'), exportBtn = $('exportBtn'),
+      statusEl = $('status'), gapInput = $('gapMs'),
+      timecode = $('timecode'), totalTimeEl = $('totalTime'),
+      playBtn = $('playBtn'), stopBtn = $('stopBtn'), loopBtn = $('loopBtn'),
+      prevBtn = $('prevBtn'), nextBtn = $('nextBtn'), zoomInBtn = $('zoomInBtn'), zoomOutBtn = $('zoomOutBtn'),
+      deleteSelBtn = $('deleteSelBtn'), undoBtn = $('undoBtn'),
+      startInput = $('startInput'), endInput = $('endInput'), durInput = $('durInput'), clearSelBtn = $('clearSelBtn'),
+      waveTitle = $('waveTitle'), waveformScroll = $('waveformScroll'), waveformInner = $('waveformInner'),
+      waveCanvas = $('waveCanvas'), shadeLeft = $('shadeLeft'), shadeRight = $('shadeRight'),
+      handleStart = $('handleStart'), handleEnd = $('handleEnd'), playhead = $('playhead'), noSelection = $('noSelection'),
+      ruler = $('ruler'), cutsLayer = $('cutsLayer'), selectionOverlayEl = $('selectionOverlay');
+
+// draggable picker marker shown on the ruler; created once, re-attached each drawRuler() since
+// drawRuler() clears ruler.innerHTML to redraw tick labels.
+const rulerPicker = document.createElement('div');
+rulerPicker.className = 'rulerPicker';
+rulerPicker.id = 'rulerPicker';
+
+function uid(){ return Math.random().toString(36).slice(2,9); }
+function fmtTime(s){
+  if (!isFinite(s) || s < 0) s = 0;
+  const m = Math.floor(s/60), sec = s - m*60;
+  return String(m).padStart(2,'0') + ':' + sec.toFixed(3).padStart(6,'0');
+}
+function selectedTrack(){ return tracks.find(t => t.id === selectedId) || null; }
+function bufferOf(t){ return buffersById[t.id]; }
+
+// ---------- Undo history ----------
+function snapshot(){
+  return {
+    selectedId,
+    tracks: tracks.map(t => ({ id:t.id, name:t.name, duration:t.duration, start:t.start, end:t.end,
+                                volume:t.volume, cuts: t.cuts.map(c => [c[0], c[1]]) }))
+  };
+}
+function pushHistory(){
+  history.push(snapshot());
+  if (history.length > MAX_HISTORY) history.shift();
+}
+function undo(){
+  if (!history.length) return;
+  const prev = history.pop();
+  tracks = prev.tracks.map(t => ({ ...t, cuts: t.cuts.map(c => [c[0], c[1]]) }));
+  selectedId = tracks.find(t => t.id === prev.selectedId) ? prev.selectedId : (tracks[0] ? tracks[0].id : null);
+  selection = null;
+  stopPlayback();
+  render();
+  drawWaveform();
+}
+undoBtn.addEventListener('click', undo);
+window.addEventListener('keydown', (e) => {
+  const tag = document.activeElement && document.activeElement.tagName;
+  const typing = tag === 'INPUT' || tag === 'TEXTAREA';
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && e.key.toLowerCase() === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return; }
+  if (!typing && (e.key === 'Delete' || e.key === 'Backspace') && selection) { e.preventDefault(); deleteSelection(); }
+});
+
+// ---------- Loading ----------
+async function loadFromManifest(){
+  statusEl.textContent = 'Loading clips...';
+  let files = [];
+  try {
+    const res = await fetch(MANIFEST_URL, { cache: 'no-store' });
+    if (!res.ok) throw new Error('manifest ' + res.status);
+    files = await res.json();
+  } catch (err) {
+    console.error(err);
+    statusEl.textContent = 'No manifest.json found — run "npm run build" (or node scripts/generate-manifest.js) to list audio/ contents, then reload.';
+    render();
+    return;
+  }
+  for (const name of files) {
+    try {
+      const res = await fetch(AUDIO_FOLDER + encodeURIComponent(name));
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const arrBuf = await res.arrayBuffer();
+      const audioBuf = await ctx.decodeAudioData(arrBuf);
+      addTrack(name, audioBuf);
+    } catch (err) {
+      console.error('Failed to load', name, err);
+    }
+  }
+  statusEl.textContent = '';
+  render();
+  if (tracks.length && !selectedId) selectTrack(tracks[0].id);
+}
+
+function addTrack(name, buffer){
+  const id = uid();
+  buffersById[id] = buffer;
+  tracks.push({ id, name, duration: buffer.duration, start: 0, end: buffer.duration, volume: 1, cuts: [] });
+}
+
+fileInput.addEventListener('change', async (e) => {
+  const files = Array.from(e.target.files);
+  if (!files.length) return;
+  pushHistory();
+  statusEl.textContent = 'Decoding...';
+  for (const file of files) {
+    try {
+      const arrBuf = await file.arrayBuffer();
+      const audioBuf = await ctx.decodeAudioData(arrBuf.slice(0));
+      addTrack(file.name, audioBuf);
+    } catch (err) {
+      console.error('Failed to decode', file.name, err);
+    }
+  }
+  statusEl.textContent = '';
+  fileInput.value = '';
+  render();
+  if (!selectedId && tracks.length) selectTrack(tracks[0].id);
+});
+
+// ---------- Segment math (trim + cuts) ----------
+function getSegments(t){
+  const cuts = t.cuts.slice().sort((a,b) => a[0]-b[0]);
+  const segs = [];
+  let cursor = t.start;
+  for (const [cs, ce] of cuts) {
+    const s = Math.max(cs, t.start), e = Math.min(ce, t.end);
+    if (e <= cursor) continue;
+    if (s > cursor) segs.push([cursor, Math.min(s, t.end)]);
+    cursor = Math.max(cursor, e);
+    if (cursor >= t.end) break;
+  }
+  if (cursor < t.end) segs.push([cursor, t.end]);
+  return segs.filter(([a,b]) => b - a > 0.001);
+}
+function effectiveDuration(t){ return getSegments(t).reduce((a,[s,e]) => a + (e-s), 0); }
+function concatToBufferTime(t, concatPos){
+  const segs = getSegments(t);
+  let acc = 0;
+  for (const [s,e] of segs) {
+    const len = e - s;
+    if (concatPos <= acc + len) return s + (concatPos - acc);
+    acc += len;
+  }
+  return segs.length ? segs[segs.length-1][1] : t.start;
+}
+function bufferToConcatTime(t, bufTime){
+  const segs = getSegments(t);
+  let acc = 0;
+  for (const [s,e] of segs) {
+    if (bufTime >= s && bufTime <= e) return acc + (bufTime - s);
+    if (bufTime < s) return acc;
+    acc += (e - s);
+  }
+  return acc;
+}
+
+// ---------- Track list rendering ----------
+function render(){
+  list.innerHTML = '';
+  emptyMsg.style.display = tracks.length ? 'none' : 'block';
+  exportBtn.disabled = tracks.length === 0;
+  deleteSelBtn.disabled = !selection;
+
+  tracks.forEach((t, i) => {
+    const row = document.createElement('div');
+    row.className = 'track' + (selectedId === t.id ? ' selected' : '');
+    row.draggable = true;
+    row.dataset.index = i;
+    const cutsNote = t.cuts.length ? ` • ${t.cuts.length} cut${t.cuts.length>1?'s':''}` : '';
+    row.innerHTML = `
+      <span class="handleDrag">⠿</span>
+      <span class="idx">${i+1}</span>
+      <span class="tname">${escapeHtml(t.name)}</span>
+      <span class="tdur">${fmtTime(effectiveDuration(t))} / ${fmtTime(t.duration)}${cutsNote}</span>
+      <div class="volwrap">Vol <input type="range" class="volIn" min="0" max="2" step="0.01" value="${t.volume}"><span class="volVal">${Math.round(t.volume*100)}%</span></div>
+      <div class="iconBtn removeBtn" title="Remove">✕</div>
+    `;
+    row.querySelector('.tname').addEventListener('click', () => selectTrack(t.id));
+    row.querySelector('.removeBtn').addEventListener('click', () => removeTrack(t.id));
+    const volIn = row.querySelector('.volIn'), volVal = row.querySelector('.volVal');
+    let volHistoryPushed = false;
+    volIn.addEventListener('pointerdown', () => { volHistoryPushed = false; });
+    volIn.addEventListener('input', () => {
+      if (!volHistoryPushed) { pushHistory(); volHistoryPushed = true; }
+      t.volume = parseFloat(volIn.value);
+      volVal.textContent = Math.round(t.volume*100) + '%';
+      if (isPlaying && selectedId === t.id && playGain) playGain.gain.value = t.volume;
+    });
+
+    row.addEventListener('dragstart', () => { pushHistory(); dragFromIndex = i; row.classList.add('dragging'); });
+    row.addEventListener('dragend', () => row.classList.remove('dragging'));
+    row.addEventListener('dragover', ev => ev.preventDefault());
+    row.addEventListener('drop', ev => {
+      ev.preventDefault();
+      const to = parseInt(row.dataset.index);
+      if (dragFromIndex === null || dragFromIndex === to) { history.pop(); return; }
+      const [moved] = tracks.splice(dragFromIndex, 1);
+      tracks.splice(to, 0, moved);
+      dragFromIndex = null;
+      render();
+    });
+
+    list.appendChild(row);
+  });
+}
+
+function escapeHtml(s){ const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function removeTrack(id){
+  pushHistory();
+  if (selectedId === id) { stopPlayback(); selectedId = null; }
+  tracks = tracks.filter(t => t.id !== id);
+  render();
+  if (!selectedId && tracks.length) selectTrack(tracks[0].id);
+  else if (!tracks.length) drawEmptyWaveform();
+}
+
+// ---------- Waveform editor ----------
+function selectTrack(id){
+  stopPlayback();
+  selectedId = id;
+  selection = null;
+  render();
+  drawWaveform();
+}
+
+function computePeaks(buffer, numBuckets){
+  const chans = [];
+  for (let c = 0; c < buffer.numberOfChannels; c++) chans.push(buffer.getChannelData(c));
+  const length = buffer.length;
+  const bucketSize = Math.max(1, Math.floor(length / numBuckets));
+  return chans.map(data => {
+    const peaks = new Array(numBuckets);
+    for (let i = 0; i < numBuckets; i++) {
+      const start = i * bucketSize;
+      const end = Math.min(start + bucketSize, length);
+      let min = 0, max = 0;
+      for (let j = start; j < end; j++) {
+        const v = data[j];
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+      peaks[i] = [min, max];
+    }
+    return peaks;
+  });
+}
+
+function drawEmptyWaveform(){
+  waveTitle.textContent = 'No track selected';
+  noSelection.style.display = 'block';
+  waveformScroll.style.display = 'none';
+}
+
+function drawWaveform(){
+  const t = selectedTrack();
+  if (!t) { drawEmptyWaveform(); return; }
+  noSelection.style.display = 'none';
+  waveformScroll.style.display = 'block';
+  waveTitle.textContent = t.name;
+
+  const width = Math.max(200, Math.round(t.duration * pxPerSecond));
+  const height = 180;
+  const dpr = window.devicePixelRatio || 1;
+  waveCanvas.style.width = width + 'px';
+  waveCanvas.style.height = height + 'px';
+  waveCanvas.width = width * dpr;
+  waveCanvas.height = height * dpr;
+  waveformInner.style.width = width + 'px';
+
+  const peaksPerChannel = computePeaks(bufferOf(t), width);
+  const g = waveCanvas.getContext('2d');
+  g.setTransform(1,0,0,1,0,0);
+  g.scale(dpr, dpr);
+  g.clearRect(0, 0, width, height);
+
+  const numChannels = peaksPerChannel.length;
+  const laneH = height / numChannels;
+  g.fillStyle = '#5ecbd8';
+  peaksPerChannel.forEach((peaks, ci) => {
+    const mid = ci * laneH + laneH / 2;
+    const scale = (laneH / 2) * 0.9;
+    for (let x = 0; x < peaks.length; x++) {
+      const [min, max] = peaks[x];
+      const y1 = mid - max * scale;
+      const y2 = mid - min * scale;
+      g.fillRect(x, y1, 1, Math.max(1, y2 - y1));
+    }
+    if (ci > 0) {
+      g.strokeStyle = '#2a2a2a';
+      g.beginPath(); g.moveTo(0, ci*laneH); g.lineTo(width, ci*laneH); g.stroke();
+    }
+  });
+
+  drawRuler(width, t.duration);
+  positionTrimUI(width, t);
+  renderCutsLayer(width, t);
+  renderSelectionOverlay();
+  updateSelectionInputs(t);
+  updatePlayheadForConcat(t, pausedConcatPos);
+}
+
+function drawRuler(width, duration){
+  ruler.innerHTML = '';
+  ruler.style.width = width + 'px';
+  const step = pxPerSecond >= 200 ? 1 : pxPerSecond >= 80 ? 2 : pxPerSecond >= 40 ? 5 : 10;
+  for (let s = 0; s <= duration; s += step) {
+    const tick = document.createElement('span');
+    tick.className = 'rulerTick';
+    tick.style.left = (s * pxPerSecond) + 'px';
+    tick.textContent = s.toFixed(0) + 's';
+    ruler.appendChild(tick);
+  }
+  ruler.appendChild(rulerPicker);
+}
+
+function positionTrimUI(width, t){
+  const startPx = (t.start / t.duration) * width;
+  const endPx = (t.end / t.duration) * width;
+  handleStart.style.left = startPx + 'px';
+  handleEnd.style.left = endPx + 'px';
+  shadeLeft.style.left = '0px';
+  shadeLeft.style.width = startPx + 'px';
+  shadeRight.style.left = endPx + 'px';
+  shadeRight.style.width = (width - endPx) + 'px';
+}
+
+function renderCutsLayer(width, t){
+  cutsLayer.innerHTML = '';
+  t.cuts.forEach(([s,e]) => {
+    const div = document.createElement('div');
+    div.className = 'cutShade';
+    const x1 = (s / t.duration) * width, x2 = (e / t.duration) * width;
+    div.style.left = x1 + 'px';
+    div.style.width = Math.max(1, x2 - x1) + 'px';
+    cutsLayer.appendChild(div);
+  });
+}
+
+function renderSelectionOverlay(){
+  const t = selectedTrack();
+  if (!t || !selection) { selectionOverlayEl.style.display = 'none'; deleteSelBtn.disabled = true; return; }
+  const width = waveCanvas.clientWidth;
+  const s = Math.min(selection.start, selection.end), e = Math.max(selection.start, selection.end);
+  const x1 = (s / t.duration) * width, x2 = (e / t.duration) * width;
+  selectionOverlayEl.style.left = x1 + 'px';
+  selectionOverlayEl.style.width = Math.max(1, x2 - x1) + 'px';
+  selectionOverlayEl.style.display = 'block';
+  deleteSelBtn.disabled = (e - s) < 0.02;
+}
+
+function updateSelectionInputs(t){
+  startInput.value = t.start.toFixed(2);
+  endInput.value = t.end.toFixed(2);
+  durInput.value = effectiveDuration(t).toFixed(2);
+}
+
+function updateTimecode(cur, total){
+  timecode.firstChild.textContent = fmtTime(cur);
+  totalTimeEl.textContent = '/ ' + fmtTime(total);
+}
+
+function updatePlayheadForConcat(t, concatPos){
+  const bufTime = concatToBufferTime(t, concatPos);
+  const width = waveCanvas.clientWidth;
+  const px = (bufTime / t.duration) * width;
+  playhead.style.left = px + 'px';
+  rulerPicker.style.left = px + 'px';
+  updateTimecode(concatPos, effectiveDuration(t));
+}
+
+// ---- dragging trim handles ----
+function setupHandleDrag(handleEl, which){
+  handleEl.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const t = selectedTrack();
+    if (!t) return;
+    pushHistory();
+    const width = waveCanvas.clientWidth;
+    const onMove = (ev) => {
+      const rect = waveformInner.getBoundingClientRect();
+      let px = ev.clientX - rect.left;
+      px = Math.max(0, Math.min(width, px));
+      let sec = (px / width) * t.duration;
+      if (which === 'start') { sec = Math.min(sec, t.end - 0.02); t.start = Math.max(0, sec); }
+      else { sec = Math.max(sec, t.start + 0.02); t.end = Math.min(t.duration, sec); }
+      positionTrimUI(width, t);
+      updateSelectionInputs(t);
+      render();
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      drawWaveform();
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  });
+}
+setupHandleDrag(handleStart, 'start');
+setupHandleDrag(handleEnd, 'end');
+
+startInput.addEventListener('change', () => {
+  const t = selectedTrack(); if (!t) return;
+  pushHistory();
+  let v = parseFloat(startInput.value) || 0;
+  v = Math.max(0, Math.min(v, t.end - 0.02));
+  t.start = v;
+  drawWaveform(); render();
+});
+endInput.addEventListener('change', () => {
+  const t = selectedTrack(); if (!t) return;
+  pushHistory();
+  let v = parseFloat(endInput.value);
+  if (isNaN(v)) v = t.duration;
+  v = Math.min(t.duration, Math.max(v, t.start + 0.02));
+  t.end = v;
+  drawWaveform(); render();
+});
+clearSelBtn.addEventListener('click', () => {
+  const t = selectedTrack(); if (!t) return;
+  pushHistory();
+  t.start = 0; t.end = t.duration; t.cuts = [];
+  selection = null;
+  drawWaveform(); render();
+});
+
+// ---- selecting a range on the waveform (drag) / seeking (click) ----
+function isOnHandle(target){ return target.closest && (target.closest('#handleStart') || target.closest('#handleEnd')); }
+
+waveformInner.addEventListener('pointerdown', (e) => {
+  if (isOnHandle(e.target)) return;
+  const t = selectedTrack(); if (!t) return;
+  const rect = waveformInner.getBoundingClientRect();
+  const width = waveCanvas.clientWidth;
+  const startPx = e.clientX - rect.left;
+  const startSec = (startPx / width) * t.duration;
+  let dragging = false;
+
+  const onMove = (ev) => {
+    const px = Math.max(0, Math.min(width, ev.clientX - rect.left));
+    if (Math.abs(px - startPx) > 4) dragging = true;
+    if (dragging) {
+      const sec = (px / width) * t.duration;
+      selection = { start: startSec, end: sec };
+      renderSelectionOverlay();
+    }
+  };
+  const onUp = () => {
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+    if (!dragging) {
+      selection = null;
+      renderSelectionOverlay();
+      seekTo(t, startSec);
+    }
+  };
+  window.addEventListener('pointermove', onMove);
+  window.addEventListener('pointerup', onUp);
+});
+
+// ---- picker: a draggable marker (rulerPicker) sits on the ruler line.
+// Clicking anywhere on the ruler jumps it there; grabbing the marker itself lets you drag it.
+ruler.addEventListener('pointerdown', (e) => {
+  if (e.target === rulerPicker) return; // handled by rulerPicker's own listener below
+  const t = selectedTrack(); if (!t) return;
+  const rect = ruler.getBoundingClientRect();
+  const width = waveCanvas.clientWidth;
+  const px = Math.max(0, Math.min(width, e.clientX - rect.left));
+  const sec = (px / width) * t.duration;
+  seekTo(t, sec);
+});
+
+rulerPicker.addEventListener('pointerdown', (e) => {
+  e.stopPropagation();
+  const t = selectedTrack(); if (!t) return;
+  const rect = ruler.getBoundingClientRect();
+  const width = waveCanvas.clientWidth;
+  const onMove = (ev) => {
+    const px = Math.max(0, Math.min(width, ev.clientX - rect.left));
+    const sec = (px / width) * t.duration;
+    seekTo(t, sec);
+  };
+  const onUp = () => {
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+  };
+  window.addEventListener('pointermove', onMove);
+  window.addEventListener('pointerup', onUp);
+});
+
+function seekTo(t, sec){
+  const concat = bufferToConcatTime(t, sec);
+  pausedConcatPos = concat;
+  if (isPlaying) scheduleSegments(t, concat);
+  else updatePlayheadForConcat(t, concat);
+}
+
+function deleteSelection(){
+  const t = selectedTrack(); if (!t || !selection) return;
+  const s = Math.max(t.start, Math.min(selection.start, selection.end));
+  const e = Math.min(t.end, Math.max(selection.start, selection.end));
+  if (e - s < 0.02) { selection = null; renderSelectionOverlay(); return; }
+  pushHistory();
+  let merged = t.cuts.concat([[s, e]]).sort((a,b) => a[0]-b[0]);
+  const out = [];
+  for (const c of merged) {
+    if (out.length && c[0] <= out[out.length-1][1] + 0.001) out[out.length-1][1] = Math.max(out[out.length-1][1], c[1]);
+    else out.push([c[0], c[1]]);
+  }
+  t.cuts = out;
+  selection = null;
+  stopPlayback();
+  drawWaveform(); render();
+}
+deleteSelBtn.addEventListener('click', deleteSelection);
+
+// ---------- Transport / playback (segment-aware) ----------
+function stopSourceOnly(){
+  playSources.forEach(s => { try { s.onended = null; s.stop(); } catch(e){} try { s.disconnect(); } catch(e){} });
+  playSources = [];
+  if (playGain) { try { playGain.disconnect(); } catch(e){} playGain = null; }
+  if (rafId) cancelAnimationFrame(rafId);
+}
+
+function scheduleSegments(t, fromConcat){
+  stopSourceOnly();
+  const segs = getSegments(t);
+  if (!segs.length) return;
+  const gain = ctx.createGain();
+  gain.gain.value = t.volume;
+  gain.connect(ctx.destination);
+  playGain = gain;
+
+  const lead = 0.05;
+  const startCtxTime = ctx.currentTime + lead;
+  let acc = 0;
+  const buf = bufferOf(t);
+  let lastSrc = null;
+
+  segs.forEach(([s, e]) => {
+    const len = e - s;
+    const segStartConcat = acc, segEndConcat = acc + len;
+    if (segEndConcat > fromConcat + 0.0005) {
+      const offsetIntoSeg = Math.max(0, fromConcat - segStartConcat);
+      const playDur = len - offsetIntoSeg;
+      const when = startCtxTime + Math.max(0, segStartConcat - fromConcat);
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(gain);
+      src.start(when, s + offsetIntoSeg, Math.max(0.001, playDur));
+      playSources.push(src);
+      lastSrc = src;
+    }
+    acc += len;
+  });
+
+  playSequenceStartCtxTime = startCtxTime;
+  playSequenceStartConcat = fromConcat;
+
+  // stopSourceOnly() above cancels any pending rAF from a previous tick() loop.
+  // Whenever this function (re)schedules playback while already playing —
+  // on loop restart, or on seeking mid-playback — the animation/timecode
+  // loop must be restarted here, otherwise the playhead freezes even though
+  // audio keeps playing.
+  if (isPlaying) tick();
+
+  if (lastSrc) {
+    lastSrc.onended = () => {
+      if (!isPlaying) return;
+      if (looping) scheduleSegments(t, 0);
+      else stopPlayback();
+    };
+  }
+}
+
+function playFrom(concatPos){
+  const t = selectedTrack(); if (!t) return;
+  scheduleSegments(t, concatPos);
+  isPlaying = true;
+  playBtn.textContent = '❚❚';
+  tick();
+}
+
+function pausePlayback(){
+  const t = selectedTrack();
+  if (t && isPlaying) {
+    const elapsed = ctx.currentTime - playSequenceStartCtxTime;
+    let pos = playSequenceStartConcat + Math.max(0, elapsed);
+    const total = effectiveDuration(t);
+    if (looping && total > 0) pos = ((pos % total) + total) % total;
+    pausedConcatPos = Math.min(pos, total);
+  }
+  stopSourceOnly();
+  isPlaying = false;
+  playBtn.textContent = '▶';
+  if (t) updatePlayheadForConcat(t, pausedConcatPos);
+}
+
+function stopPlayback(){
+  stopSourceOnly();
+  isPlaying = false;
+  playBtn.textContent = '▶';
+  pausedConcatPos = 0;
+  const t = selectedTrack();
+  if (t) updatePlayheadForConcat(t, 0);
+}
+
+function tick(){
+  const t = selectedTrack();
+  if (!t || !isPlaying) return;
+  const elapsed = ctx.currentTime - playSequenceStartCtxTime;
+  let pos = playSequenceStartConcat + Math.max(0, elapsed);
+  const total = effectiveDuration(t);
+  if (looping) {
+    pos = total > 0 ? ((pos % total) + total) % total : 0;
+  } else if (pos >= total) {
+    stopPlayback();
+    return;
+  }
+  updatePlayheadForConcat(t, pos);
+  rafId = requestAnimationFrame(tick);
+}
+
+playBtn.addEventListener('click', () => {
+  const t = selectedTrack(); if (!t) return;
+  if (isPlaying) pausePlayback();
+  else playFrom(pausedConcatPos || 0);
+});
+stopBtn.addEventListener('click', stopPlayback);
+loopBtn.addEventListener('click', () => {
+  looping = !looping;
+  loopBtn.classList.toggle('active', looping);
+});
+loopBtn.classList.add('active');
+
+prevBtn.addEventListener('click', () => {
+  const i = tracks.findIndex(t => t.id === selectedId);
+  if (i > 0) selectTrack(tracks[i-1].id);
+});
+nextBtn.addEventListener('click', () => {
+  const i = tracks.findIndex(t => t.id === selectedId);
+  if (i >= 0 && i < tracks.length - 1) selectTrack(tracks[i+1].id);
+});
+
+zoomInBtn.addEventListener('click', () => { pxPerSecond = Math.min(MAX_PX, pxPerSecond * 1.5); drawWaveform(); });
+zoomOutBtn.addEventListener('click', () => { pxPerSecond = Math.max(MIN_PX, pxPerSecond / 1.5); drawWaveform(); });
+
+// ---------- Export ----------
+exportBtn.addEventListener('click', async () => {
+  if (!tracks.length) return;
+  exportBtn.disabled = true;
+  statusEl.textContent = 'Rendering...';
+  try {
+    const sampleRate = ctx.sampleRate;
+    const numChannels = Math.max(...tracks.map(t => bufferOf(t).numberOfChannels), 1);
+    const gapSec = (parseFloat(gapInput.value) || 0) / 1000;
+
+    let totalDuration = 0;
+    tracks.forEach(t => { totalDuration += effectiveDuration(t) + gapSec; });
+    totalDuration = Math.max(totalDuration - gapSec, 0.01);
+
+    const offlineCtx = new OfflineAudioContext(numChannels, Math.ceil(totalDuration * sampleRate) + sampleRate, sampleRate);
+    let cursor = 0;
+    for (const t of tracks) {
+      const buf = bufferOf(t);
+      const gain = offlineCtx.createGain();
+      gain.gain.value = t.volume;
+      gain.connect(offlineCtx.destination);
+      for (const [s, e] of getSegments(t)) {
+        const src = offlineCtx.createBufferSource();
+        src.buffer = buf;
+        src.connect(gain);
+        const dur = e - s;
+        src.start(cursor, s, dur);
+        cursor += dur;
+      }
+      cursor += gapSec;
+    }
+
+    const rendered = await offlineCtx.startRendering();
+    const wavBlob = audioBufferToWav(rendered);
+    const url = URL.createObjectURL(wavBlob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'merged_audio.wav';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    statusEl.textContent = 'Exported merged_audio.wav';
+  } catch (err) {
+    console.error(err);
+    statusEl.textContent = 'Export failed — see console.';
+  }
+  exportBtn.disabled = false;
+});
+
+function audioBufferToWav(buffer){
+  const numChannels = buffer.numberOfChannels;
+  const sampleRate = buffer.sampleRate;
+  const bitDepth = 16;
+  const channels = [];
+  for (let c = 0; c < numChannels; c++) channels.push(buffer.getChannelData(c));
+  const interleaved = interleave(channels);
+  const dataLength = interleaved.length * (bitDepth/8);
+  const bufferOut = new ArrayBuffer(44 + dataLength);
+  const view = new DataView(bufferOut);
+  writeString(view, 0, 'RIFF'); view.setUint32(4, 36 + dataLength, true); writeString(view, 8, 'WAVE');
+  writeString(view, 12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+  view.setUint16(22, numChannels, true); view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * numChannels * (bitDepth/8), true);
+  view.setUint16(32, numChannels * (bitDepth/8), true); view.setUint16(34, bitDepth, true);
+  writeString(view, 36, 'data'); view.setUint32(40, dataLength, true);
+  floatTo16BitPCM(view, 44, interleaved);
+  return new Blob([view], { type: 'audio/wav' });
+}
+function interleave(channels){
+  if (channels.length === 1) return channels[0];
+  const length = channels[0].length, numChannels = channels.length;
+  const result = new Float32Array(length * numChannels);
+  for (let i = 0; i < length; i++) for (let c = 0; c < numChannels; c++) result[i*numChannels+c] = channels[c][i];
+  return result;
+}
+function floatTo16BitPCM(view, offset, input){
+  for (let i = 0; i < input.length; i++, offset += 2){
+    let s = Math.max(-1, Math.min(1, input[i]));
+    view.setInt16(offset, s < 0 ? s*0x8000 : s*0x7FFF, true);
+  }
+}
+function writeString(view, offset, str){ for (let i=0;i<str.length;i++) view.setUint8(offset+i, str.charCodeAt(i)); }
+
+drawEmptyWaveform();
+loadFromManifest();
+</script>
+</body>
+</html>
