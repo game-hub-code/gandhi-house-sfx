@@ -76,6 +76,9 @@
   .tdur{ color:var(--muted); font-size:0.72rem; }
   .volwrap{ display:flex; align-items:center; gap:5px; font-size:0.7rem; color:var(--muted); }
   .volwrap input{ width:70px; accent-color:var(--accent); }
+  .targetwrap{ display:flex; align-items:center; gap:5px; font-size:0.7rem; color:var(--muted); }
+  .targetwrap input{ width:52px; background:var(--panel2); border:1px solid var(--border); color:var(--text);
+                      border-radius:5px; padding:3px 5px; font-size:0.72rem; font-family:monospace; }
   .iconBtn{ background:#242424; border:1px solid #333; color:var(--text); border-radius:6px; width:26px; height:26px;
             display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:0.78rem; }
   .iconBtn:hover{ background:#333; }
@@ -218,7 +221,8 @@ function snapshot(){
   return {
     selectedId,
     tracks: tracks.map(t => ({ id:t.id, name:t.name, duration:t.duration, start:t.start, end:t.end,
-                                volume:t.volume, cuts: t.cuts.map(c => [c[0], c[1]]) }))
+                                volume:t.volume, targetDuration:t.targetDuration,
+                                cuts: t.cuts.map(c => [c[0], c[1]]) }))
   };
 }
 function pushHistory(){
@@ -277,7 +281,7 @@ async function loadFromManifest(){
 function addTrack(name, buffer){
   const id = uid();
   buffersById[id] = buffer;
-  tracks.push({ id, name, duration: buffer.duration, start: 0, end: buffer.duration, volume: 1, cuts: [] });
+  tracks.push({ id, name, duration: buffer.duration, start: 0, end: buffer.duration, volume: 1, targetDuration: null, cuts: [] });
 }
 
 fileInput.addEventListener('change', async (e) => {
@@ -316,6 +320,13 @@ function getSegments(t){
   return segs.filter(([a,b]) => b - a > 0.001);
 }
 function effectiveDuration(t){ return getSegments(t).reduce((a,[s,e]) => a + (e-s), 0); }
+// Duration this track occupies in the merged export: its own edited (trimmed/cut)
+// length, unless a "Loop to (s)" target is set, in which case the edited audio is
+// looped/truncated to fill exactly that many seconds instead.
+function trackOutputDuration(t){
+  const natural = effectiveDuration(t);
+  return (t.targetDuration && t.targetDuration > 0) ? t.targetDuration : natural;
+}
 function concatToBufferTime(t, concatPos){
   const segs = getSegments(t);
   let acc = 0;
@@ -355,11 +366,20 @@ function render(){
       <span class="idx">${i+1}</span>
       <span class="tname">${escapeHtml(t.name)}</span>
       <span class="tdur">${fmtTime(effectiveDuration(t))} / ${fmtTime(t.duration)}${cutsNote}</span>
+      <div class="targetwrap">Loop to (s) <input type="number" class="targetIn" min="0" step="0.1" placeholder="auto" value="${t.targetDuration ?? ''}"></div>
       <div class="volwrap">Vol <input type="range" class="volIn" min="0" max="2" step="0.01" value="${t.volume}"><span class="volVal">${Math.round(t.volume*100)}%</span></div>
       <div class="iconBtn removeBtn" title="Remove">✕</div>
     `;
     row.querySelector('.tname').addEventListener('click', () => selectTrack(t.id));
     row.querySelector('.removeBtn').addEventListener('click', () => removeTrack(t.id));
+    const targetIn = row.querySelector('.targetIn');
+    let targetHistoryPushed = false;
+    targetIn.addEventListener('pointerdown', () => { targetHistoryPushed = false; });
+    targetIn.addEventListener('input', () => {
+      if (!targetHistoryPushed) { pushHistory(); targetHistoryPushed = true; }
+      const v = parseFloat(targetIn.value);
+      t.targetDuration = (targetIn.value === '' || isNaN(v) || v <= 0) ? null : v;
+    });
     const volIn = row.querySelector('.volIn'), volVal = row.querySelector('.volVal');
     let volHistoryPushed = false;
     volIn.addEventListener('pointerdown', () => { volHistoryPushed = false; });
@@ -841,7 +861,7 @@ exportBtn.addEventListener('click', async () => {
     const gapSec = (parseFloat(gapInput.value) || 0) / 1000;
 
     let totalDuration = 0;
-    tracks.forEach(t => { totalDuration += effectiveDuration(t) + gapSec; });
+    tracks.forEach(t => { totalDuration += trackOutputDuration(t) + gapSec; });
     totalDuration = Math.max(totalDuration - gapSec, 0.01);
 
     const offlineCtx = new OfflineAudioContext(numChannels, Math.ceil(totalDuration * sampleRate) + sampleRate, sampleRate);
@@ -851,13 +871,23 @@ exportBtn.addEventListener('click', async () => {
       const gain = offlineCtx.createGain();
       gain.gain.value = t.volume;
       gain.connect(offlineCtx.destination);
-      for (const [s, e] of getSegments(t)) {
-        const src = offlineCtx.createBufferSource();
-        src.buffer = buf;
-        src.connect(gain);
-        const dur = e - s;
-        src.start(cursor, s, dur);
-        cursor += dur;
+      const segs = getSegments(t);
+      const segsDur = effectiveDuration(t);
+      if (!segs.length || segsDur <= 0) { cursor += gapSec; continue; }
+      let remaining = trackOutputDuration(t);
+      // Loop the edited (trimmed/cut) segments back-to-back until the target
+      // duration is filled; truncate the final repeat so total time matches exactly.
+      while (remaining > 0.0005) {
+        for (const [s, e] of segs) {
+          if (remaining <= 0.0005) break;
+          const dur = Math.min(e - s, remaining);
+          const src = offlineCtx.createBufferSource();
+          src.buffer = buf;
+          src.connect(gain);
+          src.start(cursor, s, dur);
+          cursor += dur;
+          remaining -= dur;
+        }
       }
       cursor += gapSec;
     }
