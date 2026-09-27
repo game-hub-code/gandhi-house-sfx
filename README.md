@@ -62,7 +62,3 @@ Requires a browser with the Web Audio API (`AudioContext`, `OfflineAudioContext`
 
 - All editing is non-destructive to the source files; trims/cuts/volume/order only affect the in-browser session and the exported file.
 - Export format is 16-bit PCM `.wav`.
-
-## License
-
-UNKNOWN — add a license file/section if you intend to publish this publicly.
