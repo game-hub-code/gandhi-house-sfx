@@ -82,6 +82,7 @@
   .iconBtn{ background:#242424; border:1px solid #333; color:var(--text); border-radius:6px; width:26px; height:26px;
             display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:0.78rem; }
   .iconBtn:hover{ background:#333; }
+  .swatch{ width:10px; height:10px; border-radius:3px; flex:none; }
 
   .empty{ color:var(--muted); font-size:0.9rem; text-align:center; padding:26px; border:1px dashed var(--border);
           border-radius:10px; }
@@ -238,7 +239,7 @@ function snapshot(){
   return {
     selectedId,
     tracks: tracks.map(t => ({ id:t.id, name:t.name, duration:t.duration, start:t.start, end:t.end,
-                                volume:t.volume, targetDuration:t.targetDuration,
+                                volume:t.volume, targetDuration:t.targetDuration, groupId:t.groupId,
                                 cuts: t.cuts.map(c => [c[0], c[1]]) }))
   };
 }
@@ -298,7 +299,7 @@ async function loadFromManifest(){
 function addTrack(name, buffer){
   const id = uid();
   buffersById[id] = buffer;
-  tracks.push({ id, name, duration: buffer.duration, start: 0, end: buffer.duration, volume: 1, targetDuration: null, cuts: [] });
+  tracks.push({ id, name, duration: buffer.duration, start: 0, end: buffer.duration, volume: 1, targetDuration: null, groupId: id, cuts: [] });
 }
 
 fileInput.addEventListener('change', async (e) => {
@@ -381,13 +382,16 @@ function render(){
     row.innerHTML = `
       <span class="handleDrag">⠿</span>
       <span class="idx">${i+1}</span>
+      <span class="swatch" style="background:${colorForGroup(t.groupId)}" title="Same color = same source clip"></span>
       <span class="tname">${escapeHtml(t.name)}</span>
       <span class="tdur">${fmtTime(effectiveDuration(t))} / ${fmtTime(t.duration)}${cutsNote}</span>
       <div class="targetwrap">Loop to (s) <input type="number" class="targetIn" min="0" step="0.1" placeholder="auto" value="${t.targetDuration ?? ''}"></div>
       <div class="volwrap">Vol <input type="range" class="volIn" min="0" max="2" step="0.01" value="${t.volume}"><span class="volVal">${Math.round(t.volume*100)}%</span></div>
+      <div class="iconBtn dupBtn" title="Duplicate — reuse this clip again later in the sequence">⧉</div>
       <div class="iconBtn removeBtn" title="Remove">✕</div>
     `;
     row.querySelector('.tname').addEventListener('click', () => selectTrack(t.id));
+    row.querySelector('.dupBtn').addEventListener('click', () => duplicateTrack(t.id));
     row.querySelector('.removeBtn').addEventListener('click', () => removeTrack(t.id));
     const targetIn = row.querySelector('.targetIn');
     let targetHistoryPushed = false;
@@ -425,6 +429,30 @@ function render(){
 }
 
 function escapeHtml(s){ const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+// ---------- Group colors (same source clip used more than once shares a color) ----------
+const GROUP_COLORS = ['#e0b23c','#5ecbd8','#d97fd9','#7fd98f','#e0736b','#7f9bd9','#d9c47f','#8fd9c4','#c47fd9','#d9917f'];
+const groupColorMap = {};
+let groupColorCursor = 0;
+function colorForGroup(groupId){
+  if (!groupColorMap[groupId]) {
+    groupColorMap[groupId] = GROUP_COLORS[groupColorCursor % GROUP_COLORS.length];
+    groupColorCursor++;
+  }
+  return groupColorMap[groupId];
+}
+
+function duplicateTrack(id){
+  const i = tracks.findIndex(t => t.id === id);
+  if (i === -1) return;
+  pushHistory();
+  const src = tracks[i];
+  const newId = uid();
+  buffersById[newId] = buffersById[src.id];
+  const copy = { ...src, id: newId, cuts: src.cuts.map(c => [c[0], c[1]]) };
+  tracks.splice(i + 1, 0, copy);
+  render();
+}
 
 function removeTrack(id){
   pushHistory();
