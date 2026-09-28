@@ -94,8 +94,9 @@
   .tlHint{ color:var(--muted); font-size:0.72rem; }
   .tlZoom{ margin-left:auto; display:flex; gap:6px; }
   .tlScroll{ overflow-x:auto; background:#1a1a1a; }
-  .tlInner{ position:relative; height:144px; min-width:100%; }
-  .tlBlock{ position:absolute; top:6px; bottom:6px; background:#8e5fbf; border:2px solid transparent; border-radius:6px;
+  .tlInner{ position:relative; height:164px; min-width:100%; }
+  .tlRuler{ position:absolute; top:0; left:0; right:0; height:20px; background:#222; border-bottom:1px solid #333; cursor:pointer; z-index:1; }
+  .tlBlock{ position:absolute; top:26px; bottom:6px; background:#8e5fbf; border:2px solid transparent; border-radius:6px;
             overflow:hidden; cursor:pointer; color:#fff; display:flex; flex-direction:column; padding:4px 6px; gap:3px; }
   .tlBlock.selected{ border-color:#2b9df4; }
   .tlName{ font-size:0.72rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:none; height:14px; }
@@ -106,6 +107,9 @@
                   color:#fff; background:rgba(0,0,0,0.25); border:1px solid rgba(255,255,255,0.35); border-radius:3px; }
   .tlCtl input.v:focus{ outline:none; border-color:#fff; background:rgba(0,0,0,0.45); }
   .tlPlayhead{ position:absolute; top:0; bottom:0; width:2px; margin-left:-1px; background:#2b9df4; pointer-events:none; z-index:5; }
+  .tlGrip{ position:absolute; top:0; left:50%; width:24px; height:20px; margin-left:-12px; pointer-events:auto; cursor:ew-resize; touch-action:none; }
+  .tlGrip::after{ content:''; position:absolute; top:3px; left:50%; margin-left:-7px; border-left:7px solid transparent;
+                  border-right:7px solid transparent; border-top:12px solid #2b9df4; }
   .empty{ color:var(--muted); font-size:0.9rem; text-align:center; padding:26px; border:1px dashed var(--border);
           border-radius:10px; }
 
@@ -176,10 +180,10 @@
       <button class="tbtn" id="tlStopBtn" title="Stop and return to start">■</button>
       <div class="tlTime" id="tlTime">00:00.000 / 00:00.000</div>
       <button class="btn" id="tlSplitBtn" title="Split the block under the timeline playhead into two independent blocks">Split at playhead</button>
-      <span class="tlHint">Click a block to select it and place the playhead. Vol / Spd are per block: drag the slider, or type a value in the box and press Enter (Esc cancels).</span>
+      <span class="tlHint">Drag the blue head (or click the strip above the blocks) to move the playhead; click a block to select it and place the playhead. Vol / Spd are per block: drag the slider, or type a value in the box and press Enter (Esc cancels).</span>
       <div class="tlZoom"><button class="tbtn" id="tlZoomOut" title="Zoom out">−</button><button class="tbtn" id="tlZoomIn" title="Zoom in">+</button></div>
     </div>
-    <div class="tlScroll" id="tlScroll"><div class="tlInner" id="tlInner"><div class="tlPlayhead" id="tlPlayhead"></div></div></div>
+    <div class="tlScroll" id="tlScroll"><div class="tlInner" id="tlInner"><div class="tlRuler" id="tlRuler"></div><div class="tlPlayhead" id="tlPlayhead"><div class="tlGrip" id="tlGrip"></div></div></div></div>
   </div>
 
   <div class="listHead">
@@ -1005,7 +1009,8 @@ zoomOutBtn.addEventListener('click', () => { pxPerSecond = Math.max(MIN_PX, pxPe
 
 // ---------- Timeline (all clips in export order; same scheduler as export) ----------
 const tlPlayBtn = $('tlPlayBtn'), tlStopBtn = $('tlStopBtn'), tlTime = $('tlTime'), tlSplitBtn = $('tlSplitBtn'),
-      tlZoomIn = $('tlZoomIn'), tlZoomOut = $('tlZoomOut'), tlInner = $('tlInner'), tlPlayhead = $('tlPlayhead');
+      tlZoomIn = $('tlZoomIn'), tlZoomOut = $('tlZoomOut'), tlInner = $('tlInner'), tlPlayhead = $('tlPlayhead'),
+      tlScroll = $('tlScroll'), tlRuler = $('tlRuler'), tlGrip = $('tlGrip');
 const TL_MIN_W = 170;
 let tlPx = 40;                 // px per output second
 let tlPos = 0;                 // paused position, output seconds
@@ -1127,6 +1132,37 @@ function tlSeek(T){
 }
 tlPlayBtn.addEventListener('click', () => { if (tlPlaying) tlPause(); else tlPlay(); });
 tlStopBtn.addEventListener('click', tlStop);
+
+// Drag the head (or press on the strip above the blocks) to scrub. Audio pauses while dragging and
+// resumes from the new position on release if it was playing.
+function tlScrub(e){
+  e.preventDefault(); e.stopPropagation();
+  const wasPlaying = tlPlaying;
+  if (wasPlaying) tlPause();
+  const setFrom = (ev) => {
+    const r = tlInner.getBoundingClientRect();
+    tlPos = Math.max(0, Math.min(getLayout().total, xToT(Math.max(0, ev.clientX - r.left))));
+    updateTlPlayhead(tlPos);
+  };
+  setFrom(e);
+  const move = (ev) => {
+    const sr = tlScroll.getBoundingClientRect();           // nudge the view when dragging near its edges
+    if (ev.clientX > sr.right - 30) tlScroll.scrollLeft += 20;
+    else if (ev.clientX < sr.left + 30) tlScroll.scrollLeft -= 20;
+    setFrom(ev);
+  };
+  const up = () => {
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+    window.removeEventListener('pointercancel', up);
+    if (wasPlaying) tlPlay();
+  };
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', up);
+  window.addEventListener('pointercancel', up);
+}
+tlGrip.addEventListener('pointerdown', tlScrub);
+tlRuler.addEventListener('pointerdown', tlScrub);
 
 function tToX(T){
   for (const e of tlLayoutX) {
