@@ -102,7 +102,9 @@
   .tlBlock canvas{ display:block; width:100%; height:50px; flex:none; }
   .tlCtl{ display:flex; align-items:center; gap:4px; font-size:0.62rem; flex:none; height:15px; }
   .tlCtl input{ flex:1; min-width:0; height:12px; margin:0; accent-color:#fff; }
-  .tlCtl .v{ width:36px; text-align:right; cursor:pointer; }
+  .tlCtl input.v{ flex:none; width:44px; height:15px; padding:0 4px; text-align:right; font-size:0.62rem; font-family:inherit;
+                  color:#fff; background:rgba(0,0,0,0.25); border:1px solid rgba(255,255,255,0.35); border-radius:3px; }
+  .tlCtl input.v:focus{ outline:none; border-color:#fff; background:rgba(0,0,0,0.45); }
   .tlPlayhead{ position:absolute; top:0; bottom:0; width:2px; margin-left:-1px; background:#2b9df4; pointer-events:none; z-index:5; }
   .empty{ color:var(--muted); font-size:0.9rem; text-align:center; padding:26px; border:1px dashed var(--border);
           border-radius:10px; }
@@ -174,7 +176,7 @@
       <button class="tbtn" id="tlStopBtn" title="Stop and return to start">■</button>
       <div class="tlTime" id="tlTime">00:00.000 / 00:00.000</div>
       <button class="btn" id="tlSplitBtn" title="Split the block under the timeline playhead into two independent blocks">Split at playhead</button>
-      <span class="tlHint">Click a block to select it and place the playhead. Vol / Spd sliders are per block (double-click the value to reset).</span>
+      <span class="tlHint">Click a block to select it and place the playhead. Vol / Spd are per block: drag the slider, or type a value in the box and press Enter (Esc cancels).</span>
       <div class="tlZoom"><button class="tbtn" id="tlZoomOut" title="Zoom out">−</button><button class="tbtn" id="tlZoomIn" title="Zoom in">+</button></div>
     </div>
     <div class="tlScroll" id="tlScroll"><div class="tlInner" id="tlInner"><div class="tlPlayhead" id="tlPlayhead"></div></div></div>
@@ -1182,8 +1184,8 @@ function makeTlBlock(t){
   el.className = 'tlBlock';
   el.dataset.id = id;
   el.innerHTML = `<div class="tlName"></div><canvas></canvas>
-    <div class="tlCtl">Vol<input type="range" class="vR" min="0" max="2" step="0.01"><span class="v vV"></span></div>
-    <div class="tlCtl">Spd<input type="range" class="sR" min="0.25" max="4" step="0.05"><span class="v sV"></span></div>`;
+    <div class="tlCtl">Vol<input type="range" class="vR" min="0" max="2" step="0.01"><input type="text" class="v vV" inputmode="decimal" autocomplete="off" spellcheck="false" title="Type a volume in % (0-200), then Enter"></div>
+    <div class="tlCtl">Spd<input type="range" class="sR" min="0.25" max="4" step="0.05"><input type="text" class="v sV" inputmode="decimal" autocomplete="off" spellcheck="false" title="Type a speed in x (0.25-4), then Enter"></div>`;
   const b = { el, nameEl: el.querySelector('.tlName'), canvas: el.querySelector('canvas'),
               volR: el.querySelector('.vR'), volV: el.querySelector('.vV'),
               spdR: el.querySelector('.sR'), spdV: el.querySelector('.sV'), key: '' };
@@ -1214,15 +1216,33 @@ function makeTlBlock(t){
     if (!sHist) { pushHistory(); sHist = true; }
     applySpeed(c, parseFloat(b.spdR.value));
   });
-  b.volV.addEventListener('dblclick', () => {
-    const c = cur(); if (!c || c.volume === 1) return;
-    pushHistory(); c.volume = 1;
-    if (tlPlaying && tlGains[id]) tlGains[id].gain.value = 1;
+  // Typed values: Enter / click-away commits, Esc cancels, out-of-range values are clamped, junk is reverted.
+  const showVol = () => { const c = cur(); if (c) b.volV.value = Math.round(c.volume * 100) + '%'; };
+  const showSpd = () => { const c = cur(); if (c) b.spdV.value = speedOf(c).toFixed(2) + 'x'; };
+  const wireText = (inp, show, commit) => {
+    inp.addEventListener('focus', () => inp.select());
+    inp.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); inp.blur(); }
+      else if (ev.key === 'Escape') { ev.preventDefault(); show(); inp.blur(); }
+      ev.stopPropagation();   // keep Delete/Backspace/shortcuts from reaching global handlers
+    });
+    inp.addEventListener('change', () => { commit(parseFloat(inp.value.replace(/[%x\s]/gi, '').replace(',', '.'))); show(); });
+    inp.addEventListener('blur', show);
+  };
+  wireText(b.volV, showVol, (n) => {
+    const c = cur(); if (!c || isNaN(n)) return;
+    const v = Math.min(200, Math.max(0, n)) / 100;
+    if (v === c.volume) return;
+    pushHistory(); c.volume = v;
+    if (tlPlaying && tlGains[id]) tlGains[id].gain.value = v;
+    if (isPlaying && selectedId === id && playGain) playGain.gain.value = v;
     render();
   });
-  b.spdV.addEventListener('dblclick', () => {
-    const c = cur(); if (!c || speedOf(c) === 1) return;
-    pushHistory(); applySpeed(c, 1);
+  wireText(b.spdV, showSpd, (n) => {
+    const c = cur(); if (!c || isNaN(n)) return;
+    const v = Math.min(4, Math.max(0.25, n));
+    if (v === speedOf(c)) return;
+    pushHistory(); applySpeed(c, v);
   });
   tlInner.appendChild(el);
   return b;
@@ -1262,8 +1282,8 @@ function renderTimeline(){
     const sp = speedOf(t);
     if (parseFloat(b.volR.value) !== t.volume) b.volR.value = t.volume;
     if (parseFloat(b.spdR.value) !== sp) b.spdR.value = sp;
-    b.volV.textContent = Math.round(t.volume * 100) + '%';
-    b.spdV.textContent = sp.toFixed(2) + 'x';
+    if (document.activeElement !== b.volV) b.volV.value = Math.round(t.volume * 100) + '%';
+    if (document.activeElement !== b.spdV) b.spdV.value = sp.toFixed(2) + 'x';
     const key = [w, t.start, t.end, JSON.stringify(t.cuts), t.targetDuration || 0, sp, it.dur.toFixed(4)].join('|');
     if (key !== b.key) { b.key = key; drawTlWave(b, t, w, it.dur); }
     x += w + L.gap * tlPx;
