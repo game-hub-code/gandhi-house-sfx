@@ -87,6 +87,23 @@
   .iconBtn:hover{ background:#333; }
   .swatch{ width:10px; height:10px; border-radius:3px; flex:none; }
 
+  .tlPanel{ background:var(--panel); border:1px solid var(--border); border-radius:10px; margin-bottom:22px; overflow:hidden; }
+  .tlHead{ display:flex; align-items:center; gap:10px; padding:10px 16px; border-bottom:1px solid var(--border); flex-wrap:wrap; }
+  .tlHead h2{ font-size:0.95rem; margin:0; }
+  .tlTime{ font-family:'SF Mono',Consolas,monospace; font-size:0.9rem; min-width:170px; }
+  .tlHint{ color:var(--muted); font-size:0.72rem; }
+  .tlZoom{ margin-left:auto; display:flex; gap:6px; }
+  .tlScroll{ overflow-x:auto; background:#1a1a1a; }
+  .tlInner{ position:relative; height:144px; min-width:100%; }
+  .tlBlock{ position:absolute; top:6px; bottom:6px; background:#8e5fbf; border:2px solid transparent; border-radius:6px;
+            overflow:hidden; cursor:pointer; color:#fff; display:flex; flex-direction:column; padding:4px 6px; gap:3px; }
+  .tlBlock.selected{ border-color:#2b9df4; }
+  .tlName{ font-size:0.72rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex:none; height:14px; }
+  .tlBlock canvas{ display:block; width:100%; height:50px; flex:none; }
+  .tlCtl{ display:flex; align-items:center; gap:4px; font-size:0.62rem; flex:none; height:15px; }
+  .tlCtl input{ flex:1; min-width:0; height:12px; margin:0; accent-color:#fff; }
+  .tlCtl .v{ width:36px; text-align:right; cursor:pointer; }
+  .tlPlayhead{ position:absolute; top:0; bottom:0; width:2px; margin-left:-1px; background:#2b9df4; pointer-events:none; z-index:5; }
   .empty{ color:var(--muted); font-size:0.9rem; text-align:center; padding:26px; border:1px dashed var(--border);
           border-radius:10px; }
 
@@ -121,7 +138,7 @@
     <div class="sep"></div>
     <button class="tbtn danger" id="deleteSelBtn" title="Delete selected range" disabled>✂</button>
     <button class="tbtn" id="undoBtn" title="Undo (Ctrl+Z)">↶</button>
-    <button class="btn" id="splitBtn" title="Split selected clip into two independent clips at the playhead">Split at playhead</button>
+    <button class="btn" id="splitBtn" title="Split selected clip into two independent clips at the waveform playhead">Split at waveform playhead</button>
     <div class="selInfo">
       <div class="field"><label>Start</label><input id="startInput" type="number" step="0.01" min="0"></div>
       <div class="field"><label>End</label><input id="endInput" type="number" step="0.01" min="0"></div>
@@ -148,6 +165,19 @@
       </div>
     </div>
     <div class="noSelection" id="noSelection">Select a clip below to edit its waveform.</div>
+  </div>
+
+  <div class="tlPanel">
+    <div class="tlHead">
+      <h2>Timeline</h2>
+      <button class="tbtn" id="tlPlayBtn" title="Play / pause the whole timeline">▶</button>
+      <button class="tbtn" id="tlStopBtn" title="Stop and return to start">■</button>
+      <div class="tlTime" id="tlTime">00:00.000 / 00:00.000</div>
+      <button class="btn" id="tlSplitBtn" title="Split the block under the timeline playhead into two independent blocks">Split at playhead</button>
+      <span class="tlHint">Click a block to select it and place the playhead. Vol / Spd sliders are per block (double-click the value to reset).</span>
+      <div class="tlZoom"><button class="tbtn" id="tlZoomOut" title="Zoom out">−</button><button class="tbtn" id="tlZoomIn" title="Zoom in">+</button></div>
+    </div>
+    <div class="tlScroll" id="tlScroll"><div class="tlInner" id="tlInner"><div class="tlPlayhead" id="tlPlayhead"></div></div></div>
   </div>
 
   <div class="listHead">
@@ -414,12 +444,8 @@ function render(){
       v = Math.min(4, Math.max(0.25, v));
       if (v === speedOf(t)) { speedIn.value = v; return; }
       pushHistory();
-      const live = isPlaying && selectedId === t.id;
-      const pos = live ? currentConcatPos(t) : 0;
-      t.speed = v;
       speedIn.value = v;
-      if (live) { pausedConcatPos = pos; scheduleSegments(t, pos); }
-      render();
+      applySpeed(t, v);
     });
     speedIn.addEventListener('mousedown', ev => ev.stopPropagation());
     const volIn = row.querySelector('.volIn'), volVal = row.querySelector('.volVal');
@@ -430,6 +456,8 @@ function render(){
       t.volume = parseFloat(volIn.value);
       volVal.textContent = Math.round(t.volume*100) + '%';
       if (isPlaying && selectedId === t.id && playGain) playGain.gain.value = t.volume;
+      if (tlPlaying && tlGains[t.id]) tlGains[t.id].gain.value = t.volume;
+      renderTimeline();
     });
 
     row.addEventListener('dragstart', () => { pushHistory(); dragFromIndex = i; row.classList.add('dragging'); });
@@ -447,6 +475,7 @@ function render(){
 
     list.appendChild(row);
   });
+  renderTimeline();
 }
 
 function escapeHtml(s){ const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
@@ -786,18 +815,25 @@ function deleteSelection(){
 deleteSelBtn.addEventListener('click', deleteSelection);
 
 // ---------- Split (two independent clips, same source buffer, no audible change) ----------
-function splitAtPlayhead(){
-  const t = selectedTrack(); if (!t) return;
-  if (t.targetDuration) { statusEl.textContent = 'Clear "Loop to" on this clip before splitting.'; return; }
-  let sp = concatToBufferTime(t, currentConcatPos(t));
+function splitTrackAt(t, spIn){
+  if (t.targetDuration) { statusEl.textContent = 'Clear "Loop to" on this clip before splitting.'; return false; }
+  let sp = spIn, snapped = false;
   // snap to a cut edge within 2 ms so no sub-millisecond sliver (dropped by getSegments) is lost
   for (const c of t.cuts) {
-    if (Math.abs(sp - c[0]) < 0.002) sp = c[0];
-    else if (Math.abs(sp - c[1]) < 0.002) sp = c[1];
+    if (Math.abs(sp - c[0]) < 0.002) { sp = c[0]; snapped = true; break; }
+    if (Math.abs(sp - c[1]) < 0.002) { sp = c[1]; snapped = true; break; }
+  }
+  // otherwise snap to a whole number of samples from the start of the segment it falls in, so the
+  // second half keeps the exact sample phase of the original and the halves join with no change
+  if (!snapped) {
+    const sr = bufferOf(t).sampleRate;
+    const seg = getSegments(t).find(([a, b]) => sp >= a && sp <= b);
+    const base = seg ? seg[0] : t.start;
+    sp = base + Math.round((sp - base) * sr) / sr;
   }
   if (!(sp > t.start + 0.02 && sp < t.end - 0.02)) {
     statusEl.textContent = 'Move the playhead inside the clip (not at its edges) to split.';
-    return;
+    return false;
   }
   pushHistory();
   const i = tracks.findIndex(x => x.id === t.id);
@@ -811,6 +847,11 @@ function splitAtPlayhead(){
   stopPlayback();
   render();
   drawWaveform();
+  return true;
+}
+function splitAtPlayhead(){
+  const t = selectedTrack(); if (!t) return;
+  splitTrackAt(t, concatToBufferTime(t, currentConcatPos(t)));
 }
 splitBtn.addEventListener('click', splitAtPlayhead);
 
@@ -878,10 +919,19 @@ function scheduleSegments(t, fromConcat){
 
 function playFrom(concatPos){
   const t = selectedTrack(); if (!t) return;
+  tlPause();
   scheduleSegments(t, concatPos);
   isPlaying = true;
   playBtn.textContent = '❚❚';
   tick();
+}
+
+function applySpeed(t, v){
+  const live = isPlaying && selectedId === t.id;
+  const pos = live ? currentConcatPos(t) : 0;
+  t.speed = v;
+  if (live) { pausedConcatPos = pos; scheduleSegments(t, pos); }
+  render();
 }
 
 function currentConcatPos(t){
@@ -951,6 +1001,291 @@ nextBtn.addEventListener('click', () => {
 zoomInBtn.addEventListener('click', () => { pxPerSecond = Math.min(MAX_PX, pxPerSecond * 1.5); drawWaveform(); });
 zoomOutBtn.addEventListener('click', () => { pxPerSecond = Math.max(MIN_PX, pxPerSecond / 1.5); drawWaveform(); });
 
+// ---------- Timeline (all clips in export order; same scheduler as export) ----------
+const tlPlayBtn = $('tlPlayBtn'), tlStopBtn = $('tlStopBtn'), tlTime = $('tlTime'), tlSplitBtn = $('tlSplitBtn'),
+      tlZoomIn = $('tlZoomIn'), tlZoomOut = $('tlZoomOut'), tlInner = $('tlInner'), tlPlayhead = $('tlPlayhead');
+const TL_MIN_W = 170;
+let tlPx = 40;                 // px per output second
+let tlPos = 0;                 // paused position, output seconds
+let tlPlaying = false, tlStartCtx = 0, tlStartPos = 0, tlSources = [], tlGains = {}, tlRaf = null, tlSig = '';
+let tlLayoutX = [];            // [{id,x,w,T,dur}]
+const tlEls = {};              // track id -> block DOM refs
+
+// Where each clip sits on the output timeline. Used by preview playback AND export.
+function getLayout(){
+  const gap = (parseFloat(gapInput.value) || 0) / 1000;
+  let T = 0; const items = [];
+  for (const t of tracks) {
+    const dur = (getSegments(t).length && effectiveDuration(t) > 0) ? trackOutputDuration(t) : 0;
+    items.push({ t, T, dur });
+    T += dur + gap;
+  }
+  return { items, gap, total: Math.max(T - gap, 0) };
+}
+// Source pieces of one clip on the output timeline (loops the edited segments up to outDur).
+function chunksFor(t, outDur){
+  const segs = getSegments(t), sp = speedOf(t), out = [];
+  if (!segs.length) return out;
+  let rem = outDur, rel = 0;
+  while (rem > 0.0005) {
+    for (const [s, e] of segs) {
+      if (rem <= 0.0005) break;
+      const d = Math.min((e - s) / sp, rem);
+      out.push({ rel, d, s });
+      rel += d; rem -= d;
+    }
+  }
+  return out;
+}
+// Schedules the whole sequence on actx. Output time fromT plays at actx time whenBase.
+function scheduleSequence(actx, whenBase, fromT, gainsOut){
+  const L = getLayout(); const srcs = [];
+  for (const it of L.items) {
+    if (it.dur <= 0 || it.T + it.dur <= fromT + 0.0005) continue;
+    const t = it.t, buf = bufferOf(t), sp = speedOf(t);
+    const g = actx.createGain();
+    g.gain.value = t.volume;
+    g.connect(actx.destination);
+    if (gainsOut) gainsOut[t.id] = g;
+    for (const ch of chunksFor(t, it.dur)) {
+      let c = it.T + ch.rel, d = ch.d, off = ch.s;
+      if (c + d <= fromT + 0.0005) continue;
+      if (c < fromT) { const skip = fromT - c; off += skip * sp; d -= skip; c = fromT; }
+      if (d <= 0.0005) continue;
+      const when = whenBase + (c - fromT);
+      const src = actx.createBufferSource();
+      src.buffer = buf;
+      src.playbackRate.value = sp;
+      src.connect(g);
+      src.start(when, off);
+      src.stop(when + d);
+      srcs.push(src);
+    }
+  }
+  return { srcs, total: L.total };
+}
+
+function layoutSig(L){
+  return L.items.map(({t}) => [t.id, t.start, t.end, speedOf(t), t.targetDuration || 0, JSON.stringify(t.cuts)].join(':')).join('|') + '|' + L.gap;
+}
+function tlCurrentPos(){ return tlPlaying ? tlStartPos + Math.max(0, ctx.currentTime - tlStartCtx) : tlPos; }
+function tlStopSources(){
+  tlSources.forEach(s => { try { s.stop(); } catch(e){} try { s.disconnect(); } catch(e){} });
+  tlSources = [];
+  Object.values(tlGains).forEach(g => { try { g.disconnect(); } catch(e){} });
+  tlGains = {};
+}
+function tlSchedule(fromT){
+  tlStopSources();
+  tlStartCtx = ctx.currentTime + 0.05;
+  tlStartPos = fromT;
+  tlSources = scheduleSequence(ctx, tlStartCtx, fromT, tlGains).srcs;
+}
+function tlPlay(){
+  stopPlayback();
+  if (ctx.state === 'suspended') ctx.resume();
+  const L = getLayout(); if (L.total <= 0) return;
+  if (tlPos >= L.total - 0.001) tlPos = 0;
+  tlPlaying = true;
+  tlPlayBtn.textContent = '❚❚';
+  tlSig = layoutSig(L);
+  tlSchedule(tlPos);
+  tlTick();
+}
+function tlPause(){
+  if (!tlPlaying) return;
+  tlPos = Math.min(tlCurrentPos(), getLayout().total);
+  tlPlaying = false;
+  tlStopSources();
+  if (tlRaf) cancelAnimationFrame(tlRaf);
+  tlPlayBtn.textContent = '▶';
+  updateTlPlayhead();
+}
+function tlStop(){
+  tlPlaying = false;
+  tlStopSources();
+  if (tlRaf) cancelAnimationFrame(tlRaf);
+  tlPos = 0;
+  tlPlayBtn.textContent = '▶';
+  updateTlPlayhead();
+}
+function tlTick(){
+  if (!tlPlaying) return;
+  const pos = tlCurrentPos();
+  if (pos >= getLayout().total) { tlStop(); return; }
+  updateTlPlayhead(pos);
+  tlRaf = requestAnimationFrame(tlTick);
+}
+function tlSeek(T){
+  const total = getLayout().total;
+  T = Math.max(0, Math.min(total, T));
+  tlPos = T;
+  if (tlPlaying) { if (T >= total) tlStop(); else tlSchedule(T); }
+  updateTlPlayhead(T);
+}
+tlPlayBtn.addEventListener('click', () => { if (tlPlaying) tlPause(); else tlPlay(); });
+tlStopBtn.addEventListener('click', tlStop);
+
+function tToX(T){
+  for (const e of tlLayoutX) {
+    if (e.dur <= 0) continue;
+    if (T <= e.T + e.dur + 1e-9) return e.x + Math.max(0, Math.min(1, (T - e.T) / e.dur)) * e.w;
+  }
+  const last = tlLayoutX[tlLayoutX.length - 1];
+  return last ? last.x + last.w : 0;
+}
+function xToT(x){
+  let total = 0;
+  for (const e of tlLayoutX) {
+    if (e.dur <= 0) continue;
+    total = e.T + e.dur;
+    if (x < e.x + e.w) return e.T + Math.max(0, Math.min(1, (x - e.x) / e.w)) * e.dur;
+  }
+  return total;
+}
+function updateTlPlayhead(pos){
+  if (pos === undefined) pos = tlCurrentPos();
+  tlPlayhead.style.left = tToX(pos) + 'px';
+  tlTime.textContent = fmtTime(pos) + ' / ' + fmtTime(getLayout().total);
+}
+
+function drawTlWave(b, t, w, dur){
+  const cv = b.canvas, cw = Math.max(10, Math.round(w - 16)), H = 50;
+  cv.width = cw; cv.height = H;
+  const g = cv.getContext('2d');
+  g.clearRect(0, 0, cw, H);
+  const buf = bufferOf(t), ED = effectiveDuration(t);
+  if (!buf || ED <= 0 || dur <= 0) return;
+  const sr = buf.sampleRate, data = buf.getChannelData(0);
+  const pw = Math.max(1, Math.round(cw * (ED / speedOf(t)) / dur)); // columns for one pass
+  const peaks = new Array(pw);
+  for (let x = 0; x < pw; x++) {
+    const c0 = (x / pw) * ED, c1 = ((x + 1) / pw) * ED;
+    const b0 = concatToBufferTime(t, c0), b1 = Math.min(t.end, b0 + (c1 - c0));
+    const i0 = Math.floor(b0 * sr), i1 = Math.max(i0 + 1, Math.floor(b1 * sr));
+    const step = Math.max(1, Math.floor((i1 - i0) / 48));
+    let mn = 0, mx = 0;
+    for (let i = i0; i < i1 && i < data.length; i += step) { const v = data[i]; if (v < mn) mn = v; if (v > mx) mx = v; }
+    peaks[x] = [mn, mx];
+  }
+  g.fillStyle = 'rgba(255,255,255,0.8)';
+  const mid = H / 2, sc = mid * 0.95;
+  for (let x = 0; x < cw; x++) {
+    const [mn, mx] = peaks[x % pw];
+    g.fillRect(x, mid - mx * sc, 1, Math.max(1, (mx - mn) * sc));
+  }
+}
+
+function makeTlBlock(t){
+  const id = t.id;
+  const el = document.createElement('div');
+  el.className = 'tlBlock';
+  el.dataset.id = id;
+  el.innerHTML = `<div class="tlName"></div><canvas></canvas>
+    <div class="tlCtl">Vol<input type="range" class="vR" min="0" max="2" step="0.01"><span class="v vV"></span></div>
+    <div class="tlCtl">Spd<input type="range" class="sR" min="0.25" max="4" step="0.05"><span class="v sV"></span></div>`;
+  const b = { el, nameEl: el.querySelector('.tlName'), canvas: el.querySelector('canvas'),
+              volR: el.querySelector('.vR'), volV: el.querySelector('.vV'),
+              spdR: el.querySelector('.sR'), spdV: el.querySelector('.sV'), key: '' };
+  const cur = () => tracks.find(x => x.id === id);
+
+  el.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('.tlCtl')) return;
+    const rect = tlInner.getBoundingClientRect();
+    tlSeek(xToT(e.clientX - rect.left));
+    selectTrack(id);
+  });
+
+  let vHist = false, sHist = false;
+  b.volR.addEventListener('pointerdown', () => { vHist = false; });
+  b.volR.addEventListener('change', () => { vHist = false; });
+  b.volR.addEventListener('input', () => {
+    const c = cur(); if (!c) return;
+    if (!vHist) { pushHistory(); vHist = true; }
+    c.volume = parseFloat(b.volR.value);
+    if (tlPlaying && tlGains[id]) tlGains[id].gain.value = c.volume;
+    if (isPlaying && selectedId === id && playGain) playGain.gain.value = c.volume;
+    render();
+  });
+  b.spdR.addEventListener('pointerdown', () => { sHist = false; });
+  b.spdR.addEventListener('change', () => { sHist = false; });
+  b.spdR.addEventListener('input', () => {
+    const c = cur(); if (!c) return;
+    if (!sHist) { pushHistory(); sHist = true; }
+    applySpeed(c, parseFloat(b.spdR.value));
+  });
+  b.volV.addEventListener('dblclick', () => {
+    const c = cur(); if (!c || c.volume === 1) return;
+    pushHistory(); c.volume = 1;
+    if (tlPlaying && tlGains[id]) tlGains[id].gain.value = 1;
+    render();
+  });
+  b.spdV.addEventListener('dblclick', () => {
+    const c = cur(); if (!c || speedOf(c) === 1) return;
+    pushHistory(); applySpeed(c, 1);
+  });
+  tlInner.appendChild(el);
+  return b;
+}
+
+function renderTimeline(){
+  const L = getLayout();
+  const sig = layoutSig(L);
+  if (tlPlaying && sig !== tlSig) {           // structure changed while playing: continue from same position
+    const pos = Math.min(tlCurrentPos(), L.total);
+    tlSig = sig;
+    if (L.total <= 0 || pos >= L.total) tlStop(); else tlSchedule(pos);
+  }
+  tlSig = sig;
+  if (tlPos > L.total) tlPos = L.total;
+
+  let x = 0; tlLayoutX = []; const seen = {};
+  L.items.forEach(it => {
+    const t = it.t, w = Math.max(TL_MIN_W, it.dur * tlPx);
+    tlLayoutX.push({ id: t.id, x, w, T: it.T, dur: it.dur });
+    let b = tlEls[t.id];
+    if (!b) {
+      b = tlEls[t.id] = makeTlBlock(t);
+      // keep DOM (tab) order equal to track order: put a new block before the next existing one
+      const idx = L.items.findIndex(i => i.t.id === t.id);
+      for (let j = idx + 1; j < L.items.length; j++) {
+        const nb = tlEls[L.items[j].t.id];
+        if (nb) { tlInner.insertBefore(b.el, nb.el); break; }
+      }
+    }
+    seen[t.id] = 1;
+    b.el.style.left = (x + 1) + 'px';
+    b.el.style.width = (w - 2) + 'px';
+    b.el.classList.toggle('selected', t.id === selectedId);
+    b.nameEl.textContent = t.name;
+    b.el.title = t.name;
+    const sp = speedOf(t);
+    if (parseFloat(b.volR.value) !== t.volume) b.volR.value = t.volume;
+    if (parseFloat(b.spdR.value) !== sp) b.spdR.value = sp;
+    b.volV.textContent = Math.round(t.volume * 100) + '%';
+    b.spdV.textContent = sp.toFixed(2) + 'x';
+    const key = [w, t.start, t.end, JSON.stringify(t.cuts), t.targetDuration || 0, sp, it.dur.toFixed(4)].join('|');
+    if (key !== b.key) { b.key = key; drawTlWave(b, t, w, it.dur); }
+    x += w + L.gap * tlPx;
+  });
+  for (const id of Object.keys(tlEls)) {
+    if (!seen[id]) { tlEls[id].el.remove(); delete tlEls[id]; }
+  }
+  tlInner.style.width = Math.max(x - L.gap * tlPx, 200) + 'px';
+  updateTlPlayhead();
+}
+
+function splitTimeline(){
+  const L = getLayout(), T = tlCurrentPos();
+  const it = L.items.find(i => i.dur > 0 && T >= i.T && T < i.T + i.dur);
+  if (!it) { statusEl.textContent = 'Place the timeline playhead on a block to split it.'; return; }
+  splitTrackAt(it.t, concatToBufferTime(it.t, (T - it.T) * speedOf(it.t)));
+}
+tlSplitBtn.addEventListener('click', splitTimeline);
+tlZoomIn.addEventListener('click', () => { tlPx = Math.min(400, tlPx * 1.5); for (const id in tlEls) tlEls[id].key = ''; renderTimeline(); });
+tlZoomOut.addEventListener('click', () => { tlPx = Math.max(8, tlPx / 1.5); for (const id in tlEls) tlEls[id].key = ''; renderTimeline(); });
+gapInput.addEventListener('input', renderTimeline);
+
 // ---------- Export ----------
 exportBtn.addEventListener('click', async () => {
   if (!tracks.length) return;
@@ -959,42 +1294,9 @@ exportBtn.addEventListener('click', async () => {
   try {
     const sampleRate = ctx.sampleRate;
     const numChannels = Math.max(...tracks.map(t => bufferOf(t).numberOfChannels), 1);
-    const gapSec = (parseFloat(gapInput.value) || 0) / 1000;
-
-    let totalDuration = 0;
-    tracks.forEach(t => { totalDuration += trackOutputDuration(t) + gapSec; });
-    totalDuration = Math.max(totalDuration - gapSec, 0.01);
-
+    const totalDuration = Math.max(getLayout().total, 0.01);
     const offlineCtx = new OfflineAudioContext(numChannels, Math.ceil(totalDuration * sampleRate) + sampleRate, sampleRate);
-    let cursor = 0;
-    for (const t of tracks) {
-      const buf = bufferOf(t);
-      const gain = offlineCtx.createGain();
-      gain.gain.value = t.volume;
-      gain.connect(offlineCtx.destination);
-      const segs = getSegments(t);
-      const segsDur = effectiveDuration(t);
-      if (!segs.length || segsDur <= 0) { cursor += gapSec; continue; }
-      let remaining = trackOutputDuration(t);
-      // Loop the edited (trimmed/cut) segments back-to-back until the target
-      // duration is filled; truncate the final repeat so total time matches exactly.
-      const sp = speedOf(t);
-      while (remaining > 0.0005) {
-        for (const [s, e] of segs) {
-          if (remaining <= 0.0005) break;
-          const dur = Math.min((e - s) / sp, remaining); // output-time seconds
-          const src = offlineCtx.createBufferSource();
-          src.buffer = buf;
-          src.playbackRate.value = sp;
-          src.connect(gain);
-          src.start(cursor, s);
-          src.stop(cursor + dur);
-          cursor += dur;
-          remaining -= dur;
-        }
-      }
-      cursor += gapSec;
-    }
+    scheduleSequence(offlineCtx, 0, 0, null);
 
     const rendered = await offlineCtx.startRendering();
     const wavBlob = audioBufferToWav(rendered);
