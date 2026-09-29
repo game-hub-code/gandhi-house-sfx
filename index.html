@@ -568,14 +568,14 @@ function drawWaveform(){
   const dpr = window.devicePixelRatio || 1;
   waveCanvas.style.width = width + 'px';
   waveCanvas.style.height = height + 'px';
-  waveCanvas.width = width * dpr;
+  waveCanvas.width = Math.min(Math.round(width * dpr), 16000); // browsers refuse canvases > ~32k px
   waveCanvas.height = height * dpr;
   waveformInner.style.width = width + 'px';
 
   const peaksPerChannel = computePeaks(bufferOf(t), width);
   const g = waveCanvas.getContext('2d');
   g.setTransform(1,0,0,1,0,0);
-  g.scale(dpr, dpr);
+  g.scale(waveCanvas.width / width, dpr);
   g.clearRect(0, 0, width, height);
 
   const numChannels = peaksPerChannel.length;
@@ -1188,7 +1188,7 @@ function updateTlPlayhead(pos){
 }
 
 function drawTlWave(b, t, w, dur){
-  const cv = b.canvas, cw = Math.max(10, Math.round(w - 16)), H = 50;
+  const cv = b.canvas, cw = Math.min(8000, Math.max(10, Math.round(w - 16))), H = 50;
   cv.width = cw; cv.height = H;
   const g = cv.getContext('2d');
   g.clearRect(0, 0, cw, H);
